@@ -41,6 +41,8 @@
   #btn-convert:not(:disabled):hover { background: var(--accent-hover); }
   #btn-download { background: var(--success); color: #fff; flex: 1; }
   #btn-download:not(:disabled):hover { background: #15803d; }
+  #btn-onebook { background: var(--surface); color: var(--success); border: 1px solid var(--success); }
+  #btn-onebook:not(:disabled):hover { background: var(--success-bg); }
   #btn-reset { background: var(--bg); color: var(--text-sub); border: 1px solid var(--border); }
   #btn-reset:hover { background: var(--border); }
   #status { font-size: 13px; margin-top: 14px; padding: 10px 14px; border-radius: 8px; display: none; line-height: 1.6; }
@@ -93,6 +95,7 @@
   <div class="btn-row">
     <button id="btn-convert" disabled>整形する</button>
     <button id="btn-download" disabled>まとめてExcel出力</button>
+    <button id="btn-onebook" disabled>1冊にまとめる</button>
     <button id="btn-reset">リセット</button>
   </div>
   <div id="status" role="status"></div>
@@ -101,7 +104,7 @@
 <div class="card" id="result-section">
   <h2>整形結果 <span class="badge" id="total-badge">0シート</span></h2>
   <div id="result-list"></div>
-  <div class="count-note">「まとめてExcel出力」は1つのファイルにシート分けして出力します。1つずつ欲しいときは各行の「出力」を押してね。</div>
+  <div class="count-note">「まとめてExcel出力」は、シートごとに別々のExcelブックで出力します（ブラウザに「複数ファイルのダウンロードを許可しますか？」と聞かれたら「許可」を押してね）。<br>1つのブックにシート分けで入れたいときは「1冊にまとめる」を使ってね。</div>
 </div>
 
 <div class="card" id="preview-section">
@@ -331,7 +334,7 @@ if (typeof module !== "undefined") module.exports = { COLS, extractAll, extractR
 // ===== 画面操作 =====
 const $ = (id) => document.getElementById(id);
 const dropZone = $("drop-zone"), fileInput = $("file-input"), fileNameEl = $("file-name");
-const btnConvert = $("btn-convert"), btnDownload = $("btn-download"), btnReset = $("btn-reset");
+const btnConvert = $("btn-convert"), btnDownload = $("btn-download"), btnOneBook = $("btn-onebook"), btnReset = $("btn-reset");
 const statusEl = $("status"), previewSection = $("preview-section"), resultSection = $("result-section");
 
 let files = [];     // [{ name, buffer }]
@@ -357,7 +360,7 @@ async function handleFiles(list) {
   const ok = all.filter((f) => /\.xlsx$/i.test(f.name));
   const ng = all.length - ok.length;
   if (!ok.length) { showStatus("error", "xlsxファイルを選んでください（.xls の場合は一度 .xlsx で保存し直してください）。"); return; }
-  results = []; btnDownload.disabled = true; resultSection.style.display = "none"; previewSection.style.display = "none";
+  results = []; btnDownload.disabled = true; btnOneBook.disabled = true; resultSection.style.display = "none"; previewSection.style.display = "none";
   try {
     files = await Promise.all(ok.map((f) => f.arrayBuffer().then((buffer) => ({ name: f.name, buffer }))));
   } catch { showStatus("error", "ファイルを読み込めませんでした。"); return; }
@@ -385,7 +388,7 @@ btnConvert.addEventListener("click", async () => {
     if (!results.length) throw new Error("整形できるシートがありませんでした。" + (skipped.length ? " " + skipped.join("、") : ""));
     renderResults();
     showPreview(0);
-    btnDownload.disabled = false;
+    btnDownload.disabled = false; btnOneBook.disabled = false;
     const total = results.reduce((a, r) => a + r.rows.length, 0);
     const msg = `${results.length}シート・合計${total}件を整形しました。`;
     if (skipped.length) showStatus("warn", msg + " 読み込めなかったもの：" + skipped.join("、"));
@@ -452,36 +455,58 @@ const stem = (name) => name.replace(/\.xlsx$/i, "");
 const fileSafe = (s) => String(s).replace(/[\\/:*?"<>|]/g, "_");
 
 // 1シートずつ出力
+function outName(r) {
+  const base = r.sheetsInFile > 1 ? `${stem(r.fileName)}_${r.sheetName}` : stem(r.fileName);
+  return "表記FMT_" + fileSafe(base) + ".xlsx";
+}
+async function saveOne(r) {
+  const wb = buildWorkbook(ExcelJS, [{ name: r.sheetName, rows: r.rows }]);
+  await saveWorkbook(wb, outName(r));
+}
 async function downloadOne(i, btn) {
   const r = results[i]; if (!r) return;
   btn.disabled = true;
   try {
-    const wb = buildWorkbook(ExcelJS, [{ name: r.sheetName, rows: r.rows }]);
-    const base = r.sheetsInFile > 1 ? `${stem(r.fileName)}_${r.sheetName}` : stem(r.fileName);
-    await saveWorkbook(wb, "表記FMT_" + fileSafe(base) + ".xlsx");
+    await saveOne(r);
     showStatus("success", `「${r.sheetName}」を出力しました。`);
   } catch (err) { console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message); }
   finally { btn.disabled = false; }
 }
 
-// まとめて1ファイル（シート分け）
+// まとめて出力：シートごとに別々のブック
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 btnDownload.addEventListener("click", async () => {
   if (!results.length) return;
   btnDownload.disabled = true;
   try {
+    for (let i = 0; i < results.length; i++) {
+      showStatus("success", `出力中… ${i + 1} / ${results.length}`);
+      await saveOne(results[i]);
+      await sleep(500); // ブラウザが連続ダウンロードを取りこぼさないよう少し間をあける
+    }
+    showStatus("success", `${results.length}個のExcelブックを出力しました。`);
+  } catch (err) { console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message); }
+  finally { btnDownload.disabled = false; }
+});
+
+// 1冊にまとめる：1つのブックにシート分け
+btnOneBook.addEventListener("click", async () => {
+  if (!results.length) return;
+  btnOneBook.disabled = true;
+  try {
     const wb = buildWorkbook(ExcelJS, results.map((r) => ({ name: r.sheetName, rows: r.rows })));
     const name = results.length === 1 ? stem(results[0].fileName) : (files.length === 1 ? stem(files[0].name) : "まとめ");
     await saveWorkbook(wb, "表記FMT_" + fileSafe(name) + ".xlsx");
-    showStatus("success", `${results.length}シートを1つのファイルにまとめて出力しました。`);
+    showStatus("success", `${results.length}シートを1冊のブックにまとめて出力しました。`);
   } catch (err) { console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message); }
-  finally { btnDownload.disabled = false; }
+  finally { btnOneBook.disabled = false; }
 });
 
 btnReset.addEventListener("click", () => {
   files = []; results = []; fileInput.value = "";
   fileNameEl.style.display = "none"; dropZone.classList.remove("has-file");
   dropZone.querySelector(".drop-label").textContent = "ここにxlsxをドロップ";
-  btnConvert.disabled = true; btnDownload.disabled = true;
+  btnConvert.disabled = true; btnDownload.disabled = true; btnOneBook.disabled = true;
   resultSection.style.display = "none"; previewSection.style.display = "none"; hideStatus();
 });
 </script>
