@@ -47,6 +47,21 @@
   #status.success { background: var(--success-bg); color: var(--success); display: block; }
   #status.error { background: var(--error-bg); color: var(--error); display: block; }
   #status.warn { background: var(--warn-bg); color: var(--warn); display: block; }
+  #result-section { display: none; }
+  #result-section h2 { font-size: 14px; font-weight: 700; color: var(--text-sub); margin-bottom: 14px; }
+  .result-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+  .result-item.active { border-color: var(--accent); background: var(--accent-light); }
+  .result-item .ri-name { flex: 1; min-width: 0; }
+  .result-item .ri-sheet { font-size: 14px; font-weight: 600; word-break: break-all; }
+  .result-item .ri-file { font-size: 11px; color: var(--text-sub); word-break: break-all; margin-top: 2px; }
+  .result-item .ri-warn { font-size: 11px; color: var(--warn); margin-top: 4px; }
+  .result-item .ri-count { font-size: 13px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+  .result-item button { padding: 7px 14px; font-size: 13px; }
+  .btn-preview { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+  .btn-preview:hover { background: var(--accent-light); }
+  .btn-one { background: var(--success); color: #fff; }
+  .btn-one:hover { background: #15803d; }
+  @media (max-width: 600px) { .result-item { flex-wrap: wrap; } .result-item .ri-name { flex-basis: 100%; } }
   #preview-section { display: none; }
   #preview-section h2 { font-size: 14px; font-weight: 700; color: var(--text-sub); margin-bottom: 14px; }
   .table-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--border); border-radius: 8px; }
@@ -64,27 +79,33 @@
 <body>
 <header>
   <h1>表記FMT 変換ツール</h1>
-  <p>掲載後チェックリスト（xlsx）を読み込んで「整形する」を押すと、表記FMT形式のExcelを出力できます。<br>URLはそのままクリックで飛べるリンク付きで出力します。</p>
+  <p>掲載後チェックリスト（xlsx）を読み込んで「整形する」を押すと、表記FMT形式のExcelを出力できます。<br>ファイルが複数でも、1つのファイルにシートが複数あっても、チェックリストのシートを全部整形します。URLはクリックで飛べるリンク付きです。</p>
 </header>
 
 <div class="card">
   <div id="drop-zone" tabindex="0" role="button" aria-label="xlsxファイルを選択">
     <span class="drop-icon">📂</span>
     <div class="drop-label">ここにxlsxをドロップ</div>
-    <div class="drop-sub">またはクリックしてファイルを選択</div>
+    <div class="drop-sub">またはクリックしてファイルを選択（複数ファイル・複数シートもまとめてOK）</div>
     <div class="file-name" id="file-name"></div>
   </div>
-  <input type="file" id="file-input" accept=".xlsx">
+  <input type="file" id="file-input" accept=".xlsx" multiple>
   <div class="btn-row">
     <button id="btn-convert" disabled>整形する</button>
-    <button id="btn-download" disabled>Excel出力</button>
+    <button id="btn-download" disabled>まとめてExcel出力</button>
     <button id="btn-reset">リセット</button>
   </div>
   <div id="status" role="status"></div>
 </div>
 
+<div class="card" id="result-section">
+  <h2>整形結果 <span class="badge" id="total-badge">0シート</span></h2>
+  <div id="result-list"></div>
+  <div class="count-note">「まとめてExcel出力」は1つのファイルにシート分けして出力します。1つずつ欲しいときは各行の「出力」を押してね。</div>
+</div>
+
 <div class="card" id="preview-section">
-  <h2>プレビュー <span class="badge" id="row-badge">0件</span></h2>
+  <h2>プレビュー：<span id="preview-name"></span> <span class="badge" id="row-badge">0件</span></h2>
   <div class="table-wrap"><table id="preview-table"></table></div>
   <div class="count-note">プレビューは主な列だけ表示しています。Excelには表記FMTの全列（非表示列を含む）が入ります。</div>
 </div>
@@ -154,27 +175,23 @@ function plain(v) {
   return v;
 }
 
-// 元ブック → 行データ配列
-function extractRows(srcWb) {
-  let ws = null, headerRow = 0;
-  for (const sheet of srcWb.worksheets) {
-    const limit = Math.min(sheet.rowCount, 30);
-    for (let r = 1; r <= limit; r++) {
-      const vals = sheet.getRow(r).values.map((v) => norm(plain(v)));
-      if (vals.includes(norm("イレギュラ管理No.")) && vals.includes(norm("お店ＩＤ"))) {
-        ws = sheet; headerRow = r; break;
-      }
-    }
-    if (ws) break;
+// 見出し行（「イレギュラ管理No.」「お店ＩＤ」を含む行）を探す
+function findHeaderRow(sheet) {
+  const limit = Math.min(sheet.rowCount, 30);
+  for (let r = 1; r <= limit; r++) {
+    const vals = sheet.getRow(r).values.map((v) => norm(plain(v)));
+    if (vals.includes(norm("イレギュラ管理No.")) && vals.includes(norm("お店ＩＤ"))) return r;
   }
-  if (!ws) throw new Error("見出し行（「イレギュラ管理No.」「お店ＩＤ」）が見つかりませんでした。掲載後チェックリストのファイルか確認してください。");
+  return 0;
+}
 
+// 1シート → 行データ配列
+function extractSheet(ws, headerRow) {
   const colIdx = {};
   ws.getRow(headerRow).eachCell({ includeEmpty: false }, (cell, c) => {
     const key = norm(plain(cell.value));
     if (key && !(key in colIdx)) colIdx[key] = c;
   });
-
   const missing = COLS.filter((c) => c.src && !(norm(c.src) in colIdx)).map((c) => c.src);
   const idCol = colIdx[norm("お店ＩＤ")], irgCol = colIdx[norm("イレギュラ管理No.")];
 
@@ -187,18 +204,43 @@ function extractRows(srcWb) {
     blankRun = 0;
     rows.push(COLS.map((c) => {
       if (!c.src || !(norm(c.src) in colIdx)) return "";
-      const cell = row.getCell(colIdx[norm(c.src)]);
-      const v = plain(cell.value);
+      const v = plain(row.getCell(colIdx[norm(c.src)]).value);
       return typeof v === "string" ? v.replace(/\r\n?/g, "\n") : v;
     }));
   }
   return { rows, missing, sheetName: ws.name };
 }
 
+// 元ブックの全シート → [{ sheetName, rows, missing }]（チェックリスト形式のシートだけ）
+function extractAll(srcWb) {
+  const out = [];
+  for (const ws of srcWb.worksheets) {
+    if (ws.state && ws.state !== "visible") continue;
+    const h = findHeaderRow(ws);
+    if (h) out.push(extractSheet(ws, h));
+  }
+  return out;
+}
+
+// 互換：最初の1シートだけ
+function extractRows(srcWb) {
+  const all = extractAll(srcWb);
+  if (!all.length) throw new Error("見出し行（「イレギュラ管理No.」「お店ＩＤ」）が見つかりませんでした。");
+  return all[0];
+}
+
+// Excelのシート名として使える形にする（31文字・禁止文字・重複）
+function safeSheetName(name, used) {
+  let base = String(name || "Sheet").replace(/[\\\/\?\*\[\]:]/g, "_").slice(0, 31) || "Sheet";
+  let n = base, k = 2;
+  while (used.has(n.toLowerCase())) { const suf = `(${k++})`; n = base.slice(0, 31 - suf.length) + suf; }
+  used.add(n.toLowerCase());
+  return n;
+}
+
 // 行データ → 表記FMTブック
-function buildWorkbook(ExcelJSLib, rows) {
-  const wb = new ExcelJSLib.Workbook();
-  const ws = wb.addWorksheet("Sheet1", {
+function addFmtSheet(wb, sheetName, rows) {
+  const ws = wb.addWorksheet(sheetName, {
     properties: { defaultRowHeight: 11, defaultColWidth: 8.25 },
   });
   const n = COLS.length;
@@ -273,18 +315,27 @@ function buildWorkbook(ExcelJSLib, rows) {
   }
 
   ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: n } };
+  return ws;
+}
+
+// sheets: [{ name, rows }] → 1冊のブック（シートごとに表記FMT）
+function buildWorkbook(ExcelJSLib, sheets) {
+  const wb = new ExcelJSLib.Workbook();
+  const used = new Set();
+  sheets.forEach((s) => addFmtSheet(wb, safeSheetName(s.name, used), s.rows));
   return wb;
 }
 
-if (typeof module !== "undefined") module.exports = { COLS, extractRows, buildWorkbook };
+if (typeof module !== "undefined") module.exports = { COLS, extractAll, extractRows, buildWorkbook };
 
 // ===== 画面操作 =====
 const $ = (id) => document.getElementById(id);
 const dropZone = $("drop-zone"), fileInput = $("file-input"), fileNameEl = $("file-name");
 const btnConvert = $("btn-convert"), btnDownload = $("btn-download"), btnReset = $("btn-reset");
-const statusEl = $("status"), previewSection = $("preview-section");
+const statusEl = $("status"), previewSection = $("preview-section"), resultSection = $("result-section");
 
-let srcBuffer = null, srcFileName = "", converted = null;
+let files = [];     // [{ name, buffer }]
+let results = [];   // [{ fileName, sheetName, rows, missing, sheetsInFile }]
 
 const PREVIEW = ["お店ＩＤ", "店舗名", "修正担当名", "掲載番号", "URL/フロントURL", "不備内容", "不備番号", "不備分類", "前月繰越フラグ"];
 
@@ -297,53 +348,85 @@ dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.clas
 dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
 dropZone.addEventListener("drop", (e) => {
   e.preventDefault(); dropZone.classList.remove("drag-over");
-  const f = e.dataTransfer.files[0]; if (f) handleFile(f);
+  if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
 });
-fileInput.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+fileInput.addEventListener("change", (e) => { if (e.target.files.length) handleFiles(e.target.files); });
 
-function handleFile(file) {
-  if (!/\.xlsx$/i.test(file.name)) { showStatus("error", "xlsxファイルを選んでください（.xls の場合は一度 .xlsx で保存し直してください）。"); return; }
-  srcFileName = file.name;
-  fileNameEl.textContent = file.name; fileNameEl.style.display = "block";
+async function handleFiles(list) {
+  const all = Array.from(list);
+  const ok = all.filter((f) => /\.xlsx$/i.test(f.name));
+  const ng = all.length - ok.length;
+  if (!ok.length) { showStatus("error", "xlsxファイルを選んでください（.xls の場合は一度 .xlsx で保存し直してください）。"); return; }
+  results = []; btnDownload.disabled = true; resultSection.style.display = "none"; previewSection.style.display = "none";
+  try {
+    files = await Promise.all(ok.map((f) => f.arrayBuffer().then((buffer) => ({ name: f.name, buffer }))));
+  } catch { showStatus("error", "ファイルを読み込めませんでした。"); return; }
+  fileNameEl.textContent = files.length === 1 ? files[0].name : `${files.length}ファイル：` + files.map((f) => f.name).join(" / ");
+  fileNameEl.style.display = "block";
   dropZone.classList.add("has-file");
   dropZone.querySelector(".drop-label").textContent = "ファイルを読み込みました";
-  converted = null; btnDownload.disabled = true; previewSection.style.display = "none"; hideStatus();
-  const reader = new FileReader();
-  reader.onload = (e) => { srcBuffer = e.target.result; btnConvert.disabled = false; };
-  reader.onerror = () => showStatus("error", "ファイルを読み込めませんでした。");
-  reader.readAsArrayBuffer(file);
+  btnConvert.disabled = false;
+  if (ng) showStatus("warn", `xlsx以外のファイル${ng}件は読み込みませんでした。`); else hideStatus();
 }
 
 btnConvert.addEventListener("click", async () => {
-  if (!srcBuffer) return;
+  if (!files.length) return;
   btnConvert.disabled = true; showStatus("success", "整形中…");
+  results = [];
+  const skipped = [];
   try {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(srcBuffer);
-    const { rows, missing } = extractRows(wb);
-    if (!rows.length) throw new Error("データ行が見つかりませんでした。");
-    converted = rows;
-    renderPreview(rows);
+    for (const f of files) {
+      const wb = new ExcelJS.Workbook();
+      try { await wb.xlsx.load(f.buffer); } catch { skipped.push(`${f.name}（開けませんでした）`); continue; }
+      const sheets = extractAll(wb).filter((s) => s.rows.length);
+      if (!sheets.length) { skipped.push(`${f.name}（チェックリストのシートが見つかりませんでした）`); continue; }
+      sheets.forEach((s) => results.push({ fileName: f.name, sheetsInFile: sheets.length, ...s }));
+    }
+    if (!results.length) throw new Error("整形できるシートがありませんでした。" + (skipped.length ? " " + skipped.join("、") : ""));
+    renderResults();
+    showPreview(0);
     btnDownload.disabled = false;
-    if (missing.length) showStatus("warn", `${rows.length}件を整形しました。元の表に見つからなかった列は空欄にしています：${missing.join("、")}`);
-    else showStatus("success", `${rows.length}件を整形しました。「Excel出力」でダウンロードできます。`);
+    const total = results.reduce((a, r) => a + r.rows.length, 0);
+    const msg = `${results.length}シート・合計${total}件を整形しました。`;
+    if (skipped.length) showStatus("warn", msg + " 読み込めなかったもの：" + skipped.join("、"));
+    else showStatus("success", msg + "「まとめてExcel出力」か、各行の「出力」でダウンロードできます。");
   } catch (err) {
     console.error(err);
     showStatus("error", err.message || "整形中にエラーが起きました。");
   } finally { btnConvert.disabled = false; }
 });
 
-function renderPreview(rows) {
+function renderResults() {
+  const box = $("result-list"); box.innerHTML = "";
+  results.forEach((r, i) => {
+    const item = document.createElement("div"); item.className = "result-item"; item.dataset.i = i;
+    const nm = document.createElement("div"); nm.className = "ri-name";
+    const s1 = document.createElement("div"); s1.className = "ri-sheet"; s1.textContent = r.sheetName;
+    const s2 = document.createElement("div"); s2.className = "ri-file"; s2.textContent = r.fileName;
+    nm.append(s1, s2);
+    if (r.missing.length) { const w = document.createElement("div"); w.className = "ri-warn"; w.textContent = "見つからず空欄にした列：" + r.missing.join("、"); nm.append(w); }
+    const cnt = document.createElement("div"); cnt.className = "ri-count"; cnt.textContent = `${r.rows.length}件`;
+    const bp = document.createElement("button"); bp.className = "btn-preview"; bp.textContent = "プレビュー"; bp.onclick = () => showPreview(i);
+    const bo = document.createElement("button"); bo.className = "btn-one"; bo.textContent = "出力"; bo.onclick = () => downloadOne(i, bo);
+    item.append(nm, cnt, bp, bo); box.append(item);
+  });
+  $("total-badge").textContent = `${results.length}シート`;
+  resultSection.style.display = "block";
+}
+
+function showPreview(i) {
+  const r = results[i]; if (!r) return;
+  document.querySelectorAll(".result-item").forEach((el) => el.classList.toggle("active", Number(el.dataset.i) === i));
   const idx = PREVIEW.map((h) => COLS.findIndex((c) => c.h === h));
   const table = $("preview-table"); table.innerHTML = "";
   const thead = table.createTHead().insertRow();
   ["#", ...PREVIEW].forEach((h) => { const th = document.createElement("th"); th.textContent = h; thead.appendChild(th); });
   const tb = table.createTBody();
-  rows.forEach((r, n) => {
+  r.rows.forEach((row, n) => {
     const tr = tb.insertRow();
     tr.insertCell().textContent = n + 1;
-    idx.forEach((i, k) => {
-      const td = tr.insertCell(); const v = String(r[i] ?? "");
+    idx.forEach((ci, k) => {
+      const td = tr.insertCell(); const v = String(row[ci] ?? "");
       td.title = v;
       if (PREVIEW[k] === "URL/フロントURL" && /^https?:\/\//i.test(v)) {
         const a = document.createElement("a"); a.href = v; a.target = "_blank"; a.rel = "noopener"; a.textContent = v; td.appendChild(a);
@@ -351,34 +434,55 @@ function renderPreview(rows) {
       if (PREVIEW[k] === "前月繰越フラグ" && v.includes("前月繰越")) td.className = "flag";
     });
   });
-  $("row-badge").textContent = `${rows.length}件`;
+  $("preview-name").textContent = r.sheetName;
+  $("row-badge").textContent = `${r.rows.length}件`;
   previewSection.style.display = "block";
 }
 
+async function saveWorkbook(wb, fileName) {
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = fileName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+}
+
+const stem = (name) => name.replace(/\.xlsx$/i, "");
+const fileSafe = (s) => String(s).replace(/[\\/:*?"<>|]/g, "_");
+
+// 1シートずつ出力
+async function downloadOne(i, btn) {
+  const r = results[i]; if (!r) return;
+  btn.disabled = true;
+  try {
+    const wb = buildWorkbook(ExcelJS, [{ name: r.sheetName, rows: r.rows }]);
+    const base = r.sheetsInFile > 1 ? `${stem(r.fileName)}_${r.sheetName}` : stem(r.fileName);
+    await saveWorkbook(wb, "表記FMT_" + fileSafe(base) + ".xlsx");
+    showStatus("success", `「${r.sheetName}」を出力しました。`);
+  } catch (err) { console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message); }
+  finally { btn.disabled = false; }
+}
+
+// まとめて1ファイル（シート分け）
 btnDownload.addEventListener("click", async () => {
-  if (!converted) return;
+  if (!results.length) return;
   btnDownload.disabled = true;
   try {
-    const wb = buildWorkbook(ExcelJS, converted);
-    const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "表記FMT_" + srcFileName.replace(/\.xlsx$/i, "") + ".xlsx";
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    showStatus("success", "Excelを出力しました。");
-  } catch (err) {
-    console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message);
-  } finally { btnDownload.disabled = false; }
+    const wb = buildWorkbook(ExcelJS, results.map((r) => ({ name: r.sheetName, rows: r.rows })));
+    const name = results.length === 1 ? stem(results[0].fileName) : (files.length === 1 ? stem(files[0].name) : "まとめ");
+    await saveWorkbook(wb, "表記FMT_" + fileSafe(name) + ".xlsx");
+    showStatus("success", `${results.length}シートを1つのファイルにまとめて出力しました。`);
+  } catch (err) { console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message); }
+  finally { btnDownload.disabled = false; }
 });
 
 btnReset.addEventListener("click", () => {
-  srcBuffer = null; srcFileName = ""; converted = null; fileInput.value = "";
+  files = []; results = []; fileInput.value = "";
   fileNameEl.style.display = "none"; dropZone.classList.remove("has-file");
   dropZone.querySelector(".drop-label").textContent = "ここにxlsxをドロップ";
   btnConvert.disabled = true; btnDownload.disabled = true;
-  previewSection.style.display = "none"; hideStatus();
+  resultSection.style.display = "none"; previewSection.style.display = "none"; hideStatus();
 });
 </script>
 </body>
