@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>表記FMT 変換ツール</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f0f2f5; --surface: #ffffff; --border: #dde1e7;
+    --accent: #2d5be3; --accent-hover: #1e43c7; --accent-light: #e8edfb;
+    --text-main: #1a1d23; --text-sub: #6b7280;
+    --success: #16a34a; --success-bg: #f0fdf4; --error: #dc2626; --error-bg: #fef2f2;
+    --warn: #b45309; --warn-bg: #fffbeb; --drop-active: #dce6fc;
+  }
+  body {
+    font-family: "Meiryo", "Meiryo UI", "Hiragino Sans", system-ui, sans-serif;
+    background: var(--bg); color: var(--text-main); min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 40px 20px;
+  }
+  header, .card { width: 100%; max-width: 960px; }
+  header { margin-bottom: 28px; }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header p { font-size: 13px; color: var(--text-sub); margin-top: 6px; line-height: 1.7; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin-bottom: 16px; }
+  #drop-zone { border: 2px dashed var(--border); border-radius: 10px; padding: 44px 24px; text-align: center; cursor: pointer; transition: background .15s, border-color .15s; background: var(--bg); }
+  #drop-zone:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #drop-zone.drag-over { background: var(--drop-active); border-color: var(--accent); }
+  #drop-zone.has-file { border-style: solid; border-color: var(--accent); background: var(--accent-light); }
+  .drop-icon { font-size: 36px; margin-bottom: 12px; display: block; }
+  .drop-label { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .drop-sub { font-size: 12px; color: var(--text-sub); }
+  #file-input { display: none; }
+  .file-name { margin-top: 10px; font-size: 13px; color: var(--accent); font-weight: 600; display: none; word-break: break-all; }
+  .btn-row { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  button { padding: 11px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s, opacity .15s; font-family: inherit; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #btn-convert { background: var(--accent); color: #fff; flex: 1; }
+  #btn-convert:not(:disabled):hover { background: var(--accent-hover); }
+  #btn-download { background: var(--success); color: #fff; flex: 1; }
+  #btn-download:not(:disabled):hover { background: #15803d; }
+  #btn-reset { background: var(--bg); color: var(--text-sub); border: 1px solid var(--border); }
+  #btn-reset:hover { background: var(--border); }
+  #status { font-size: 13px; margin-top: 14px; padding: 10px 14px; border-radius: 8px; display: none; line-height: 1.6; }
+  #status.success { background: var(--success-bg); color: var(--success); display: block; }
+  #status.error { background: var(--error-bg); color: var(--error); display: block; }
+  #status.warn { background: var(--warn-bg); color: var(--warn); display: block; }
+  #preview-section { display: none; }
+  #preview-section h2 { font-size: 14px; font-weight: 700; color: var(--text-sub); margin-bottom: 14px; }
+  .table-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; font-size: 12px; white-space: nowrap; width: 100%; }
+  th { background: #efe3ff; padding: 8px 12px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--border); color: #4b3a66; position: sticky; top: 0; z-index: 1; }
+  td { padding: 7px 12px; border-bottom: 1px solid #f0f2f5; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  td a { color: #0563c1; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafbfc; }
+  td.flag { color: #dc2626; background: #fff9c4; font-weight: 600; }
+  .badge { display: inline-block; background: var(--accent-light); color: var(--accent); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; margin-left: 8px; }
+  .count-note { font-size: 12px; color: var(--text-sub); margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>表記FMT 変換ツール</h1>
+  <p>掲載後チェックリスト（xlsx）を読み込んで「整形する」を押すと、表記FMT形式のExcelを出力できます。<br>URLはそのままクリックで飛べるリンク付きで出力します。</p>
+</header>
+
+<div class="card">
+  <div id="drop-zone" tabindex="0" role="button" aria-label="xlsxファイルを選択">
+    <span class="drop-icon">📂</span>
+    <div class="drop-label">ここにxlsxをドロップ</div>
+    <div class="drop-sub">またはクリックしてファイルを選択</div>
+    <div class="file-name" id="file-name"></div>
+  </div>
+  <input type="file" id="file-input" accept=".xlsx">
+  <div class="btn-row">
+    <button id="btn-convert" disabled>整形する</button>
+    <button id="btn-download" disabled>Excel出力</button>
+    <button id="btn-reset">リセット</button>
+  </div>
+  <div id="status" role="status"></div>
+</div>
+
+<div class="card" id="preview-section">
+  <h2>プレビュー <span class="badge" id="row-badge">0件</span></h2>
+  <div class="table-wrap"><table id="preview-table"></table></div>
+  <div class="count-note">プレビューは主な列だけ表示しています。Excelには表記FMTの全列（非表示列を含む）が入ります。</div>
+</div>
+
+<script>
+// ===== 表記FMT 変換ロジック =====
+// 元：掲載後チェックリスト（見出し行は「イレギュラ管理No.」を含む行を自動検出）
+// 先：表記FMT（1行目＝注記、2行目＝見出し、3行目〜データ）
+
+const FONT = { name: "Meiryo UI", size: 8 };
+const THIN = { style: "thin", color: { argb: "FF000000" } };
+const BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+const FILL = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
+const YELLOW = "FFFFFF00", LAVENDER = "FFCC99FF", BLUE = "FF83CBEB", ORANGE = "FFF6C6AD";
+
+// 出力列定義：src＝元データの見出し名（空なら空欄列）
+// width / hidden / wrap / fill は表記FMT.xlsx の設定をそのまま再現
+const COLS = [
+  { h: "営業確認欄",       src: null,               width: 8.25,  fill: YELLOW,   hAlign: "center" },
+  { h: "総務チェック",     src: null,               width: 8.25,  fill: YELLOW,   hAlign: "center" },
+  { h: "総務コメント",     src: null,               width: 11.33, fill: YELLOW,   hAlign: "center", wrap: true },
+  { h: "お店ＩＤ",         src: "お店ＩＤ",         width: 11.66, fill: LAVENDER },
+  { h: "店舗名",           src: "店舗名",           width: 41.08, fill: LAVENDER, wrap: true },
+  { h: "修正担当名",       src: "修正担当名",       width: 40.33, fill: LAVENDER },
+  { h: "代理店コード",     src: "代理店コード",     width: 8.25,  fill: LAVENDER, hidden: true },
+  { h: "代理店名",         src: "代理店名",         width: 8.25,  fill: LAVENDER, hidden: true },
+  { h: "掲載番号",         src: "掲載番号",         width: 8.25,  fill: LAVENDER },
+  { h: "URL/フロントURL",  src: "URL/フロントURL",  width: 40.58, fill: LAVENDER, wrap: true, link: true },
+  { h: "企画名",           src: "企画名",           width: 8.25,  fill: LAVENDER, wrap: true },
+  { h: "表記箇所",         src: "表記箇所",         width: 8.25,  fill: LAVENDER, wrap: true },
+  { h: "更新箇所",         src: "更新箇所",         width: 8.25,  fill: LAVENDER, wrap: true },
+  { h: "チェックテキスト", src: "チェックテキスト", width: 43.16, fill: LAVENDER, wrap: true },
+  { h: "不備内容",         src: "不備内容",         width: 43.16, fill: LAVENDER, wrap: true },
+  { h: "不備番号",         src: "不備番号",         width: 14,    fill: LAVENDER, wrap: true },
+  { h: "不備分類",         src: "不備分類",         width: 8.25,  fill: LAVENDER, wrap: true },
+  { h: "前月繰越フラグ",   src: "前月繰越フラグ",   width: 8.25,  fill: LAVENDER, wrap: true, note: { text: "", style: "plain" } },
+  { h: "★異議申立て",     src: "★異議申立て",     width: 16,    fill: BLUE,     wrap: true, hidden: true, note: { text: "必須*", style: "red" } },
+  { h: "★理由詳細",       src: "★理由詳細",       width: 16,    fill: BLUE,     wrap: true, hidden: true, note: { text: "「その他」の場合必須（255文字まで。超過分は削除されます）", style: "red" } },
+  { h: "異議申立て結果",   src: "異議申立て結果",   width: 9.25,  fill: ORANGE,   wrap: true, hidden: true },
+  { h: "判定理由",         src: "判定理由",         width: 9.25,  fill: ORANGE,   wrap: true, hidden: true },
+  { h: "★修正ステータス", src: "★修正ステータス", width: 12.33, fill: BLUE,     wrap: true, hidden: true, note: { text: "必須", style: "red" } },
+  { h: "★コメント欄",     src: "★コメント欄",     width: 20.08, fill: BLUE,     wrap: true, hidden: true, note: { text: "任意（255文字まで。超過分は削除されます）", style: "plain" } },
+  { h: "修正OK/NG",        src: "修正OK/NG",        width: 8.25,  fill: ORANGE,   wrap: true, hidden: true },
+  { h: "修正後不備内容",   src: "修正後不備内容",   width: 8.25,  fill: ORANGE,   wrap: true, hidden: true },
+  { h: "不備理由",         src: "不備理由",         width: 8.25,  fill: ORANGE,   wrap: true, hidden: true },
+  { h: "期日内修正報告",   src: "期日内修正報告",   width: 8.25,  fill: LAVENDER, wrap: true, hidden: true },
+  { h: "最終結果",         src: "最終結果",         width: 8.25,  fill: LAVENDER, hidden: true },
+  { h: "翌号繰越フラグ",   src: "翌号繰越フラグ",   width: 8.25,  fill: LAVENDER, hidden: true },
+];
+
+// 見出しの表記ゆれ吸収（全角/半角・空白）
+function norm(s) {
+  return String(s ?? "").normalize("NFKC").replace(/\s+/g, "");
+}
+
+// ExcelJS のセル値を素のテキスト/数値にする
+function plain(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if (v instanceof Date) return v;
+    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join("");
+    if ("text" in v) return plain(v.text);
+    if ("result" in v) return plain(v.result);
+    if ("error" in v) return "";
+    return "";
+  }
+  return v;
+}
+
+// 元ブック → 行データ配列
+function extractRows(srcWb) {
+  let ws = null, headerRow = 0;
+  for (const sheet of srcWb.worksheets) {
+    const limit = Math.min(sheet.rowCount, 30);
+    for (let r = 1; r <= limit; r++) {
+      const vals = sheet.getRow(r).values.map((v) => norm(plain(v)));
+      if (vals.includes(norm("イレギュラ管理No.")) && vals.includes(norm("お店ＩＤ"))) {
+        ws = sheet; headerRow = r; break;
+      }
+    }
+    if (ws) break;
+  }
+  if (!ws) throw new Error("見出し行（「イレギュラ管理No.」「お店ＩＤ」）が見つかりませんでした。掲載後チェックリストのファイルか確認してください。");
+
+  const colIdx = {};
+  ws.getRow(headerRow).eachCell({ includeEmpty: false }, (cell, c) => {
+    const key = norm(plain(cell.value));
+    if (key && !(key in colIdx)) colIdx[key] = c;
+  });
+
+  const missing = COLS.filter((c) => c.src && !(norm(c.src) in colIdx)).map((c) => c.src);
+  const idCol = colIdx[norm("お店ＩＤ")], irgCol = colIdx[norm("イレギュラ管理No.")];
+
+  const rows = [];
+  let blankRun = 0;
+  for (let r = headerRow + 1; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const id = plain(row.getCell(idCol).value), irg = plain(row.getCell(irgCol).value);
+    if (id === "" && irg === "") { if (++blankRun > 20) break; continue; }
+    blankRun = 0;
+    rows.push(COLS.map((c) => {
+      if (!c.src || !(norm(c.src) in colIdx)) return "";
+      const cell = row.getCell(colIdx[norm(c.src)]);
+      const v = plain(cell.value);
+      return typeof v === "string" ? v.replace(/\r\n?/g, "\n") : v;
+    }));
+  }
+  return { rows, missing, sheetName: ws.name };
+}
+
+// 行データ → 表記FMTブック
+function buildWorkbook(ExcelJSLib, rows) {
+  const wb = new ExcelJSLib.Workbook();
+  const ws = wb.addWorksheet("Sheet1", {
+    properties: { defaultRowHeight: 11, defaultColWidth: 8.25 },
+  });
+  const n = COLS.length;
+  const last = rows.length + 2;
+
+  ws.columns = COLS.map((c) => ({ width: c.width, hidden: !!c.hidden }));
+
+  // 1行目：注記
+  const r1 = ws.getRow(1);
+  r1.height = 35.5;
+  COLS.forEach((c, i) => {
+    if (!c.note) return;
+    const cell = r1.getCell(i + 1);
+    cell.value = c.note.text || null;
+    cell.font = { ...FONT, bold: c.note.style === "red", color: { argb: c.note.style === "red" ? "FFFF0000" : "FF000000" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+
+  // 2行目：見出し
+  const r2 = ws.getRow(2);
+  r2.height = 71.25;
+  COLS.forEach((c, i) => {
+    const cell = r2.getCell(i + 1);
+    cell.value = c.h;
+    cell.font = { ...FONT, color: { argb: "FF000000" } };
+    cell.fill = FILL(c.fill);
+    cell.border = BORDER;
+    cell.alignment = { horizontal: c.hAlign || "left", vertical: "middle", wrapText: c.hAlign ? !!c.wrap : true };
+  });
+
+  // 3行目〜：データ
+  rows.forEach((vals, k) => {
+    const row = ws.getRow(k + 3);
+    row.height = 48.5;
+    COLS.forEach((c, i) => {
+      const cell = row.getCell(i + 1);
+      const v = vals[i];
+      if (c.link && typeof v === "string" && /^https?:\/\//i.test(v.trim())) {
+        cell.value = { text: v.trim(), hyperlink: v.trim() };
+        cell.font = { ...FONT, color: { argb: "FF0563C1" }, underline: true };
+      } else {
+        cell.value = v === "" ? null : v;
+        cell.font = { ...FONT, color: { argb: "FF000000" } };
+      }
+      cell.border = BORDER;
+      cell.alignment = { vertical: "middle", wrapText: !!c.wrap };
+    });
+  });
+
+  if (rows.length) {
+    const colLetter = (i) => ws.getColumn(i + 1).letter;
+    const idx = (h) => COLS.findIndex((c) => c.h === h);
+
+    // 前月繰越フラグ：「前月繰越」は赤字＋黄色塗り（表記FMTの条件付き書式を再現）
+    const kc = colLetter(idx("前月繰越フラグ"));
+    ws.addConditionalFormatting({
+      ref: `${kc}3:${kc}${last}`,
+      rules: [
+        { type: "containsText", operator: "containsText", text: "前月繰越", priority: 1,
+          style: { font: { color: { argb: "FFFF0000" } }, fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFFF00" } } } },
+      ],
+    });
+
+    // プルダウン（表記FMTの入力規則を再現）
+    const dv = (h, list) => {
+      const L = colLetter(idx(h));
+      ws.dataValidations.add(`${L}3:${L}${last}`, { type: "list", allowBlank: true, formulae: [`"${list}"`] });
+    };
+    dv("総務チェック", "修正済,未修正,修正後不備,修正後不備の可能性");
+    dv("★異議申立て", "異議申立：その他(理由詳細欄に記入してください)");
+    dv("★修正ステータス", "済(修正),依頼済(CL受諾),依頼済(CL拒否),依頼済(CL応答なし)");
+  }
+
+  ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: n } };
+  return wb;
+}
+
+if (typeof module !== "undefined") module.exports = { COLS, extractRows, buildWorkbook };
+
+// ===== 画面操作 =====
+const $ = (id) => document.getElementById(id);
+const dropZone = $("drop-zone"), fileInput = $("file-input"), fileNameEl = $("file-name");
+const btnConvert = $("btn-convert"), btnDownload = $("btn-download"), btnReset = $("btn-reset");
+const statusEl = $("status"), previewSection = $("preview-section");
+
+let srcBuffer = null, srcFileName = "", converted = null;
+
+const PREVIEW = ["お店ＩＤ", "店舗名", "修正担当名", "掲載番号", "URL/フロントURL", "不備内容", "不備番号", "不備分類", "前月繰越フラグ"];
+
+function showStatus(type, msg) { statusEl.className = type; statusEl.textContent = msg; }
+function hideStatus() { statusEl.className = ""; statusEl.textContent = ""; }
+
+dropZone.addEventListener("click", () => fileInput.click());
+dropZone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault(); dropZone.classList.remove("drag-over");
+  const f = e.dataTransfer.files[0]; if (f) handleFile(f);
+});
+fileInput.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+function handleFile(file) {
+  if (!/\.xlsx$/i.test(file.name)) { showStatus("error", "xlsxファイルを選んでください（.xls の場合は一度 .xlsx で保存し直してください）。"); return; }
+  srcFileName = file.name;
+  fileNameEl.textContent = file.name; fileNameEl.style.display = "block";
+  dropZone.classList.add("has-file");
+  dropZone.querySelector(".drop-label").textContent = "ファイルを読み込みました";
+  converted = null; btnDownload.disabled = true; previewSection.style.display = "none"; hideStatus();
+  const reader = new FileReader();
+  reader.onload = (e) => { srcBuffer = e.target.result; btnConvert.disabled = false; };
+  reader.onerror = () => showStatus("error", "ファイルを読み込めませんでした。");
+  reader.readAsArrayBuffer(file);
+}
+
+btnConvert.addEventListener("click", async () => {
+  if (!srcBuffer) return;
+  btnConvert.disabled = true; showStatus("success", "整形中…");
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(srcBuffer);
+    const { rows, missing } = extractRows(wb);
+    if (!rows.length) throw new Error("データ行が見つかりませんでした。");
+    converted = rows;
+    renderPreview(rows);
+    btnDownload.disabled = false;
+    if (missing.length) showStatus("warn", `${rows.length}件を整形しました。元の表に見つからなかった列は空欄にしています：${missing.join("、")}`);
+    else showStatus("success", `${rows.length}件を整形しました。「Excel出力」でダウンロードできます。`);
+  } catch (err) {
+    console.error(err);
+    showStatus("error", err.message || "整形中にエラーが起きました。");
+  } finally { btnConvert.disabled = false; }
+});
+
+function renderPreview(rows) {
+  const idx = PREVIEW.map((h) => COLS.findIndex((c) => c.h === h));
+  const table = $("preview-table"); table.innerHTML = "";
+  const thead = table.createTHead().insertRow();
+  ["#", ...PREVIEW].forEach((h) => { const th = document.createElement("th"); th.textContent = h; thead.appendChild(th); });
+  const tb = table.createTBody();
+  rows.forEach((r, n) => {
+    const tr = tb.insertRow();
+    tr.insertCell().textContent = n + 1;
+    idx.forEach((i, k) => {
+      const td = tr.insertCell(); const v = String(r[i] ?? "");
+      td.title = v;
+      if (PREVIEW[k] === "URL/フロントURL" && /^https?:\/\//i.test(v)) {
+        const a = document.createElement("a"); a.href = v; a.target = "_blank"; a.rel = "noopener"; a.textContent = v; td.appendChild(a);
+      } else td.textContent = v.replace(/\n/g, " ");
+      if (PREVIEW[k] === "前月繰越フラグ" && v.includes("前月繰越")) td.className = "flag";
+    });
+  });
+  $("row-badge").textContent = `${rows.length}件`;
+  previewSection.style.display = "block";
+}
+
+btnDownload.addEventListener("click", async () => {
+  if (!converted) return;
+  btnDownload.disabled = true;
+  try {
+    const wb = buildWorkbook(ExcelJS, converted);
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "表記FMT_" + srcFileName.replace(/\.xlsx$/i, "") + ".xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    showStatus("success", "Excelを出力しました。");
+  } catch (err) {
+    console.error(err); showStatus("error", "Excel出力でエラーが起きました：" + err.message);
+  } finally { btnDownload.disabled = false; }
+});
+
+btnReset.addEventListener("click", () => {
+  srcBuffer = null; srcFileName = ""; converted = null; fileInput.value = "";
+  fileNameEl.style.display = "none"; dropZone.classList.remove("has-file");
+  dropZone.querySelector(".drop-label").textContent = "ここにxlsxをドロップ";
+  btnConvert.disabled = true; btnDownload.disabled = true;
+  previewSection.style.display = "none"; hideStatus();
+});
+</script>
+</body>
+</html>
